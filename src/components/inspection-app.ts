@@ -13,7 +13,9 @@ import {
   totalAnomalies,
   formatDateTime,
   readFileAsDataURL,
-  isTemplateNameDuplicate
+  isTemplateNameDuplicate,
+  rectificationStatusLabels,
+  rectificationStatusBadgeClasses
 } from '../db';
 import type {
   InspectionTemplate,
@@ -21,7 +23,10 @@ import type {
   InspectionRecord,
   InspectionItemAnswer,
   AnomalyLevel,
-  ViewName
+  ViewName,
+  RectificationTask,
+  RectificationStatus,
+  RectificationHistory
 } from '../types';
 
 @customElement('inspection-app')
@@ -444,6 +449,152 @@ export class InspectionApp extends LitElement {
       border-radius: 6px;
       border: 1px solid var(--color-border);
     }
+    .rect-tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+      border-bottom: 2px solid var(--color-border);
+    }
+    .rect-tab {
+      background: none;
+      border: none;
+      padding: 10px 16px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--color-text-muted);
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      transition: all 0.15s;
+    }
+    .rect-tab:hover {
+      color: var(--color-text);
+    }
+    .rect-tab.active {
+      color: var(--color-primary);
+      border-bottom-color: var(--color-primary);
+      font-weight: 600;
+    }
+    .rect-tab .count {
+      background: var(--color-border);
+      color: var(--color-text-muted);
+      padding: 1px 8px;
+      border-radius: 10px;
+      font-size: 12px;
+      margin-left: 6px;
+    }
+    .rect-tab.active .count {
+      background: var(--color-primary);
+      color: white;
+    }
+    .rect-task-item {
+      background: white;
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-sm);
+      padding: 14px 18px;
+      margin-bottom: 10px;
+      transition: all 0.15s;
+      cursor: pointer;
+    }
+    .rect-task-item:hover {
+      border-color: #cbd5e1;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    }
+    .rect-task-item.overdue {
+      border-left: 4px solid #ef4444;
+    }
+    .rect-task-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .rect-task-head h4 {
+      margin: 0;
+      font-size: 15px;
+    }
+    .rect-task-meta {
+      font-size: 12px;
+      color: var(--color-text-muted);
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+    }
+    .rect-task-meta .overdue-text {
+      color: #dc2626;
+      font-weight: 600;
+    }
+    .history-timeline {
+      margin-top: 16px;
+      padding-left: 8px;
+    }
+    .history-item {
+      position: relative;
+      padding: 10px 0 10px 20px;
+      border-left: 2px solid var(--color-border);
+      margin-left: 8px;
+    }
+    .history-item::before {
+      content: '';
+      position: absolute;
+      left: -7px;
+      top: 14px;
+      width: 12px;
+      height: 12px;
+      background: var(--color-primary);
+      border-radius: 50%;
+      border: 2px solid white;
+      box-shadow: 0 0 0 2px var(--color-primary);
+    }
+    .history-item .history-action {
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .history-item .history-meta {
+      font-size: 12px;
+      color: var(--color-text-muted);
+      margin-top: 2px;
+    }
+    .history-item .history-remark {
+      font-size: 13px;
+      margin-top: 6px;
+      color: var(--color-text);
+    }
+    .history-item .history-photos {
+      margin-top: 8px;
+    }
+    .section-title {
+      font-size: 15px;
+      font-weight: 600;
+      margin: 20px 0 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--color-border);
+    }
+    .photo-upload-area {
+      border: 2px dashed var(--color-border);
+      border-radius: var(--radius-sm);
+      padding: 20px;
+      text-align: center;
+      color: var(--color-text-muted);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .photo-upload-area:hover {
+      border-color: var(--color-primary);
+      color: var(--color-primary);
+      background: #eff6ff;
+    }
+    .deadline-warning {
+      color: #dc2626;
+      font-weight: 600;
+    }
+    .deadline-ok {
+      color: #059669;
+    }
   `;
 
   @state()
@@ -479,6 +630,30 @@ export class InspectionApp extends LitElement {
   @state()
   recordFilterTemplate: string | null = null;
 
+  @state()
+  rectificationTasks: RectificationTask[] = [];
+
+  @state()
+  activeRectificationTask: RectificationTask | null = null;
+
+  @state()
+  rectificationTab: RectificationStatus | 'all' | 'overdue' = 'all';
+
+  @state()
+  rectificationFilterTemplate: string | null = null;
+
+  @state()
+  rectificationRemark: string = '';
+
+  @state()
+  rectificationPhotos: string[] = [];
+
+  @state()
+  reinspectorName: string = '';
+
+  @state()
+  responsiblePerson: string = '';
+
   private toastTimer: number | null = null;
 
   private inspectionFormRef: Ref<HTMLFormElement> = createRef();
@@ -501,12 +676,14 @@ export class InspectionApp extends LitElement {
   };
 
   async refreshData() {
-    const [templates, records] = await Promise.all([
+    const [templates, records, rectificationTasks] = await Promise.all([
       db.getAllTemplates(),
-      db.getAllRecords()
+      db.getAllRecords(),
+      db.getAllRectificationTasks()
     ]);
     this.templates = templates;
     this.records = records;
+    this.rectificationTasks = rectificationTasks;
   }
 
   showToast(msg: string) {
@@ -527,6 +704,11 @@ export class InspectionApp extends LitElement {
     this.activeTemplateIdForRun = null;
     this.editingTemplateId = null;
     this.activeRecordId = null;
+    this.activeRectificationTask = null;
+    this.rectificationRemark = '';
+    this.rectificationPhotos = [];
+    this.reinspectorName = '';
+    this.responsiblePerson = '';
   }
 
   async startCreateTemplate() {
@@ -737,7 +919,47 @@ export class InspectionApp extends LitElement {
       tpl.submissionCount = (tpl.submissionCount || 0) + 1;
       await db.saveTemplate(tpl);
     }
-    this.showToast('巡检记录已提交');
+
+    const anomalyAnswers = this.activeRecord.answers.filter(
+      a => a.anomalyLevel !== 'none' && a.result !== 'pass'
+    );
+    if (anomalyAnswers.length > 0) {
+      const tasks: RectificationTask[] = anomalyAnswers.map(answer => {
+        const task: RectificationTask = {
+          id: uid(),
+          recordId: this.activeRecord!.id,
+          templateId: this.activeRecord!.templateId,
+          templateSnapshot: JSON.parse(JSON.stringify(this.activeRecord!.templateSnapshot)),
+          itemSnapshot: JSON.parse(JSON.stringify(answer.itemSnapshot)),
+          answerSnapshot: JSON.parse(JSON.stringify(answer)),
+          anomalyLevel: answer.anomalyLevel,
+          rectificationDeadline: answer.rectificationDeadline,
+          responsiblePerson: '',
+          rectificationDescription: '',
+          rectificationPhotos: [],
+          status: 'pending',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          completedAt: null,
+          reinspectedAt: null,
+          reinspector: '',
+          history: [{
+            id: uid(),
+            action: 'submit',
+            operator: this.activeRecord!.inspector,
+            remark: '巡检提交，自动生成整改任务',
+            timestamp: Date.now(),
+            photoDataUrls: []
+          }]
+        };
+        return task;
+      });
+      await db.saveRectificationTasks(tasks);
+      this.showToast(`巡检记录已提交，生成 ${tasks.length} 条整改任务`);
+    } else {
+      this.showToast('巡检记录已提交');
+    }
+
     await this.refreshData();
     this.view = 'records';
   }
@@ -769,16 +991,22 @@ export class InspectionApp extends LitElement {
   }
 
   async deleteRecord(id: string) {
-    if (!confirm('确认删除此记录？')) return;
+    if (!confirm('确认删除此记录？关联的整改任务也将被删除。')) return;
+    const rectTasks = await db.getRectificationTasksByRecord(id);
+    for (const task of rectTasks) {
+      await db.deleteRectificationTask(task.id);
+    }
     await db.deleteRecord(id);
-    this.showToast('记录已删除');
+    this.showToast('记录及关联整改任务已删除');
     this.activeRecord = null;
     this.activeRecordId = null;
     await this.refreshData();
   }
 
-  exportRecordJSON(record: InspectionRecord) {
+  async exportRecordJSON(record: InspectionRecord) {
     const anomalyItems = record.answers.filter(a => a.anomalyLevel !== 'none');
+    const rectTasks = await db.getRectificationTasksByRecord(record.id);
+
     const exportData = {
       exportTime: new Date().toISOString(),
       record: {
@@ -821,6 +1049,32 @@ export class InspectionApp extends LitElement {
           ? new Date(a.rectificationDeadline).toISOString()
           : null,
         photoCount: a.photoDataUrls.length
+      })),
+      rectificationTasks: rectTasks.map(task => ({
+        id: task.id,
+        itemName: task.itemSnapshot.name,
+        anomalyLevel: task.anomalyLevel,
+        anomalyLevelLabel: anomalyLevelLabels[task.anomalyLevel],
+        status: task.status,
+        statusLabel: rectificationStatusLabels[task.status],
+        responsiblePerson: task.responsiblePerson,
+        rectificationDeadline: task.rectificationDeadline
+          ? new Date(task.rectificationDeadline).toISOString()
+          : null,
+        rectificationDescription: task.rectificationDescription,
+        rectificationPhotoCount: task.rectificationPhotos.length,
+        createdAt: new Date(task.createdAt).toISOString(),
+        completedAt: task.completedAt ? new Date(task.completedAt).toISOString() : null,
+        reinspectedAt: task.reinspectedAt ? new Date(task.reinspectedAt).toISOString() : null,
+        reinspector: task.reinspector,
+        history: task.history.map(h => ({
+          action: h.action,
+          actionLabel: this.getHistoryActionLabel(h.action),
+          operator: h.operator,
+          remark: h.remark,
+          timestamp: new Date(h.timestamp).toISOString(),
+          photoCount: h.photoDataUrls.length
+        }))
       }))
     };
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
@@ -832,7 +1086,7 @@ export class InspectionApp extends LitElement {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    this.showToast('JSON 已导出');
+    this.showToast('JSON 已导出（含整改数据）');
   }
 
   getTemplateSubmissionStats(templateId: string) {
@@ -860,6 +1114,9 @@ export class InspectionApp extends LitElement {
           <button class="nav-tab ${this.view === 'records' ? 'active' : ''}" @click=${() => this.goTo('records')}>
             巡检记录
           </button>
+          <button class="nav-tab ${this.view === 'rectification' || this.view === 'rectification-detail' ? 'active' : ''}" @click=${() => this.goTo('rectification')}>
+            整改闭环
+          </button>
         </div>
       </div>
       <div class="app-main">
@@ -867,6 +1124,8 @@ export class InspectionApp extends LitElement {
         ${this.view === 'template-editor' ? this.renderTemplateEditor() : ''}
         ${this.view === 'inspection' ? this.renderInspectionView() : ''}
         ${this.view === 'records' ? this.renderRecordsView() : ''}
+        ${this.view === 'rectification' ? this.renderRectificationView() : ''}
+        ${this.view === 'rectification-detail' ? this.renderRectificationDetailView() : ''}
       </div>
     `;
   }
@@ -1316,14 +1575,20 @@ export class InspectionApp extends LitElement {
     `;
   }
 
+  getRectTasksForRecord(recordId: string): RectificationTask[] {
+    return this.rectificationTasks.filter(t => t.recordId === recordId);
+  }
+
   renderRecordDetail() {
     const r = this.activeRecord!;
+    const rectTasks = this.getRectTasksForRecord(r.id);
+
     return html`
       <div class="card">
         <button class="back-link" @click=${() => { this.activeRecord = null; this.activeRecordId = null; }}>← 返回记录列表</button>
         <div class="card-header" style="margin-top: 10px;">
           <h3 class="card-title">${r.templateSnapshot.name} <span style="font-size: 14px; font-weight: 400; color: var(--color-text-muted);">v${r.templateSnapshot.version || 0}</span></h3>
-          <div style="display: flex; gap: 8px;">
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
             <span class="status-tag status-submitted">已提交</span>
             <button class="btn btn-primary btn-sm" @click=${() => this.exportRecordJSON(r)}>导出 JSON</button>
           </div>
@@ -1338,10 +1603,23 @@ export class InspectionApp extends LitElement {
           ${this.renderAnomalyBadges(r.anomalyCounts)}
         </div>
 
+        ${rectTasks.length > 0
+          ? html`
+            <div class="summary-bar" style="background: #fef3c7; margin-top: 12px;">
+              <div><strong>整改任务：</strong>${rectTasks.length} 条</div>
+              <button class="btn btn-sm btn-primary" @click=${() => {
+                this.rectificationFilterTemplate = r.templateId;
+                this.goTo('rectification');
+              }}>查看全部整改</button>
+            </div>
+          `
+          : ''}
+
         <h4 style="margin: 20px 0 12px; font-size: 15px;">检查项详情</h4>
 
         ${repeat(r.answers, a => a.itemId, answer => {
           const item = answer.itemSnapshot;
+          const rectTask = rectTasks.find(t => t.itemSnapshot.id === item.id);
           return html`
             <div class="answer-item">
               <div class="answer-header">
@@ -1349,7 +1627,7 @@ export class InspectionApp extends LitElement {
                   <h4>${item.name}${item.required ? html`<span class="required-tag"> (必填)</span>` : ''}</h4>
                   ${item.description ? html`<div class="answer-meta">${item.description}</div>` : ''}
                 </div>
-                <div style="display: flex; gap: 8px; align-items: center;">
+                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
                   ${answer.anomalyLevel !== 'none'
                     ? html`<span class="${anomalyLevelBadgeClasses[answer.anomalyLevel]}">
                         ${anomalyLevelLabels[answer.anomalyLevel]}
@@ -1358,6 +1636,11 @@ export class InspectionApp extends LitElement {
                   <span style="font-weight: 600;">
                     ${answer.result === 'pass' ? '✅ 通过' : answer.result === 'fail' ? '❌ 不通过' : '⚪ N/A'}
                   </span>
+                  ${rectTask
+                    ? html`<span class="${rectificationStatusBadgeClasses[rectTask.status]}">
+                        ${rectificationStatusLabels[rectTask.status]}
+                      </span>`
+                    : ''}
                 </div>
               </div>
 
@@ -1377,9 +1660,546 @@ export class InspectionApp extends LitElement {
                     </div>
                   </div>
                 ` : ''}
+              ${rectTask
+                ? html`
+                  <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--color-border);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                      <span style="font-size: 13px; color: var(--color-text-muted);">
+                        责任人：${rectTask.responsiblePerson || '(未指定)'}
+                      </span>
+                      <button class="btn btn-sm" @click=${() => this.viewRectificationTask(rectTask.id)}>
+                        查看整改详情
+                      </button>
+                    </div>
+                  </div>
+                `
+                : ''}
             </div>
           `;
         })}
+      </div>
+    `;
+  }
+
+  isTaskOverdue(task: RectificationTask): boolean {
+    if (!task.rectificationDeadline) return false;
+    if (task.status === 'reinspected' || task.status === 'completed') return false;
+    return Date.now() > task.rectificationDeadline;
+  }
+
+  getFilteredRectificationTasks(): RectificationTask[] {
+    let tasks = this.rectificationTasks;
+    if (this.rectificationFilterTemplate) {
+      tasks = tasks.filter(t => t.templateId === this.rectificationFilterTemplate);
+    }
+    if (this.rectificationTab === 'all') {
+      return tasks;
+    }
+    if (this.rectificationTab === 'overdue') {
+      return tasks.filter(t => this.isTaskOverdue(t));
+    }
+    return tasks.filter(t => t.status === this.rectificationTab);
+  }
+
+  getRectTaskCount(status: RectificationStatus | 'overdue'): number {
+    if (status === 'overdue') {
+      return this.rectificationTasks.filter(t => this.isTaskOverdue(t)).length;
+    }
+    return this.rectificationTasks.filter(t => t.status === status).length;
+  }
+
+  async viewRectificationTask(taskId: string) {
+    const task = await db.getRectificationTask(taskId);
+    if (task) {
+      this.activeRectificationTask = task;
+      this.rectificationRemark = '';
+      this.rectificationPhotos = [];
+      this.reinspectorName = '';
+      this.responsiblePerson = task.responsiblePerson;
+      this.view = 'rectification-detail';
+    }
+  }
+
+  async handleRectificationPhotoUpload(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const dataUrls = await Promise.all(Array.from(files).map(f => readFileAsDataURL(f)));
+    this.rectificationPhotos = [...this.rectificationPhotos, ...dataUrls];
+  }
+
+  removeRectificationPhoto(index: number) {
+    this.rectificationPhotos = this.rectificationPhotos.filter((_, i) => i !== index);
+  }
+
+  async updateResponsiblePerson(name: string) {
+    if (!this.activeRectificationTask) return;
+    this.responsiblePerson = name;
+  }
+
+  async saveRectification() {
+    if (!this.activeRectificationTask) return;
+    const task = this.activeRectificationTask;
+    task.responsiblePerson = this.responsiblePerson;
+    task.updatedAt = Date.now();
+    await db.saveRectificationTask(task);
+    this.activeRectificationTask = { ...task };
+    this.showToast('责任人已保存');
+    await this.refreshData();
+  }
+
+  async submitRectificationComplete() {
+    if (!this.activeRectificationTask) return;
+    if (!this.responsiblePerson.trim()) {
+      this.showToast('请填写责任人');
+      return;
+    }
+    if (this.rectificationRemark.trim() === '' && this.rectificationPhotos.length === 0) {
+      this.showToast('请填写整改说明或上传整改照片');
+      return;
+    }
+    const task = this.activeRectificationTask;
+    const historyItem: RectificationHistory = {
+      id: uid(),
+      action: 'complete',
+      operator: this.responsiblePerson,
+      remark: this.rectificationRemark,
+      timestamp: Date.now(),
+      photoDataUrls: [...this.rectificationPhotos]
+    };
+    task.status = 'completed';
+    task.responsiblePerson = this.responsiblePerson;
+    task.rectificationDescription = this.rectificationRemark;
+    task.rectificationPhotos = [...this.rectificationPhotos];
+    task.completedAt = Date.now();
+    task.updatedAt = Date.now();
+    task.history = [...task.history, historyItem];
+    await db.saveRectificationTask(task);
+    this.activeRectificationTask = { ...task };
+    this.rectificationRemark = '';
+    this.rectificationPhotos = [];
+    this.showToast('整改已提交，等待复检');
+    await this.refreshData();
+  }
+
+  async reinspectPass() {
+    if (!this.activeRectificationTask) return;
+    if (!this.reinspectorName.trim()) {
+      this.showToast('请填写复检人');
+      return;
+    }
+    const task = this.activeRectificationTask;
+    const historyItem: RectificationHistory = {
+      id: uid(),
+      action: 'reinspect_pass',
+      operator: this.reinspectorName,
+      remark: this.rectificationRemark || '复检通过',
+      timestamp: Date.now(),
+      photoDataUrls: [...this.rectificationPhotos]
+    };
+    task.status = 'reinspected';
+    task.reinspector = this.reinspectorName;
+    task.reinspectedAt = Date.now();
+    task.updatedAt = Date.now();
+    task.history = [...task.history, historyItem];
+    await db.saveRectificationTask(task);
+    this.activeRectificationTask = { ...task };
+    this.rectificationRemark = '';
+    this.rectificationPhotos = [];
+    this.reinspectorName = '';
+    this.showToast('复检通过，整改闭环完成');
+    await this.refreshData();
+  }
+
+  async reinspectReject() {
+    if (!this.activeRectificationTask) return;
+    if (!this.reinspectorName.trim()) {
+      this.showToast('请填写复检人');
+      return;
+    }
+    if (this.rectificationRemark.trim() === '') {
+      this.showToast('请填写退回原因');
+      return;
+    }
+    const task = this.activeRectificationTask;
+    const historyItem: RectificationHistory = {
+      id: uid(),
+      action: 'reinspect_reject',
+      operator: this.reinspectorName,
+      remark: this.rectificationRemark,
+      timestamp: Date.now(),
+      photoDataUrls: [...this.rectificationPhotos]
+    };
+    task.status = 'rejected';
+    task.reinspector = this.reinspectorName;
+    task.updatedAt = Date.now();
+    task.history = [...task.history, historyItem];
+    await db.saveRectificationTask(task);
+    this.activeRectificationTask = { ...task };
+    this.rectificationRemark = '';
+    this.rectificationPhotos = [];
+    this.reinspectorName = '';
+    this.showToast('已退回，需重新整改');
+    await this.refreshData();
+  }
+
+  async resubmitRectification() {
+    if (!this.activeRectificationTask) return;
+    if (this.rectificationRemark.trim() === '' && this.rectificationPhotos.length === 0) {
+      this.showToast('请填写整改说明或上传整改照片');
+      return;
+    }
+    const task = this.activeRectificationTask;
+    const historyItem: RectificationHistory = {
+      id: uid(),
+      action: 'complete',
+      operator: task.responsiblePerson,
+      remark: this.rectificationRemark,
+      timestamp: Date.now(),
+      photoDataUrls: [...this.rectificationPhotos]
+    };
+    task.status = 'completed';
+    task.rectificationDescription = this.rectificationRemark;
+    task.rectificationPhotos = [...this.rectificationPhotos];
+    task.completedAt = Date.now();
+    task.updatedAt = Date.now();
+    task.history = [...task.history, historyItem];
+    await db.saveRectificationTask(task);
+    this.activeRectificationTask = { ...task };
+    this.rectificationRemark = '';
+    this.rectificationPhotos = [];
+    this.showToast('重新提交整改，等待复检');
+    await this.refreshData();
+  }
+
+  getHistoryActionLabel(action: string): string {
+    const labels: Record<string, string> = {
+      'submit': '任务创建',
+      'complete': '整改完成',
+      'reinspect_pass': '复检通过',
+      'reinspect_reject': '复检退回',
+      'reject': '退回整改'
+    };
+    return labels[action] || action;
+  }
+
+  renderRectificationView() {
+    const filtered = this.getFilteredRectificationTasks();
+    const tabs: { key: RectificationStatus | 'all' | 'overdue'; label: string }[] = [
+      { key: 'all', label: '全部' },
+      { key: 'pending', label: '待整改' },
+      { key: 'overdue', label: '已逾期' },
+      { key: 'completed', label: '待复检' },
+      { key: 'rejected', label: '已退回' },
+      { key: 'reinspected', label: '已完成' }
+    ];
+
+    return html`
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">整改任务</h3>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <span style="font-size: 13px; color: var(--color-text-muted);">
+              共 ${this.rectificationTasks.length} 条任务
+            </span>
+          </div>
+        </div>
+
+        <div class="filter-bar">
+          <div style="font-weight: 600; font-size: 13px;">按模板筛选：</div>
+          <select
+            .value=${this.rectificationFilterTemplate || ''}
+            @change=${(e: Event) => { this.rectificationFilterTemplate = (e.target as HTMLSelectElement).value || null; }}
+          >
+            <option value="">全部模板</option>
+            ${this.templates.map(t => html`<option value="${t.id}">${t.name}</option>`)}
+          </select>
+        </div>
+
+        <div class="rect-tabs">
+          ${tabs.map(tab => html`
+            <button
+              class="rect-tab ${this.rectificationTab === tab.key ? 'active' : ''}"
+              @click=${() => { this.rectificationTab = tab.key; }}
+            >
+              ${tab.label}
+              ${tab.key !== 'all' ? html`<span class="count">${this.getRectTaskCount(tab.key as any)}</span>` : ''}
+            </button>
+          `)}
+        </div>
+
+        ${filtered.length === 0
+          ? html`<div class="empty">暂无整改任务</div>`
+          : html`
+            ${repeat(filtered, t => t.id, task => {
+              const overdue = this.isTaskOverdue(task);
+              return html`
+                <div
+                  class="rect-task-item ${classMap({ overdue })}"
+                  @click=${() => this.viewRectificationTask(task.id)}
+                >
+                  <div class="rect-task-head">
+                    <div>
+                      <h4>${task.itemSnapshot.name}</h4>
+                      <div class="rect-task-meta">
+                        <span>来源模板：${task.templateSnapshot.name} v${task.templateSnapshot.version || 0}</span>
+                        <span>创建时间：${formatDateTime(task.createdAt)}</span>
+                      </div>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                      ${task.anomalyLevel !== 'none'
+                        ? html`<span class="${anomalyLevelBadgeClasses[task.anomalyLevel]}">
+                            ${anomalyLevelLabels[task.anomalyLevel]}
+                          </span>`
+                        : ''}
+                      <span class="${rectificationStatusBadgeClasses[task.status]}">
+                        ${rectificationStatusLabels[task.status]}
+                      </span>
+                    </div>
+                  </div>
+                  <div class="rect-task-meta">
+                    ${task.responsiblePerson
+                      ? html`<span>责任人：<strong>${task.responsiblePerson}</strong></span>`
+                      : html`<span style="color: #dc2626;">未指定责任人</span>`}
+                    ${task.rectificationDeadline
+                      ? html`<span class="${overdue ? 'overdue-text' : ''}">
+                          整改期限：${formatDateTime(task.rectificationDeadline)}
+                          ${overdue ? '（已逾期）' : ''}
+                        </span>`
+                      : html`<span>整改期限：不限</span>`}
+                  </div>
+                </div>
+              `;
+            })}
+          `}
+      </div>
+    `;
+  }
+
+  renderRectificationDetailView() {
+    const task = this.activeRectificationTask;
+    if (!task) return '';
+    const overdue = this.isTaskOverdue(task);
+    const canEdit = task.status === 'pending' || task.status === 'rejected';
+    const canReinspect = task.status === 'completed';
+
+    return html`
+      <div class="card">
+        <button class="back-link" @click=${() => { this.goTo('rectification'); }}>← 返回整改列表</button>
+        <div class="card-header" style="margin-top: 10px;">
+          <h3 class="card-title">${task.itemSnapshot.name}</h3>
+          <span class="${rectificationStatusBadgeClasses[task.status]}">
+            ${rectificationStatusLabels[task.status]}
+          </span>
+        </div>
+
+        <div class="summary-bar">
+          <div><strong>模板：</strong>${task.templateSnapshot.name} v${task.templateSnapshot.version || 0}</div>
+          <div><strong>异常等级：</strong>
+            <span class="${anomalyLevelBadgeClasses[task.anomalyLevel]}">
+              ${anomalyLevelLabels[task.anomalyLevel]}
+            </span>
+          </div>
+          <div><strong>创建时间：</strong>${formatDateTime(task.createdAt)}</div>
+          <div class="${overdue ? 'deadline-warning' : 'deadline-ok'}">
+            <strong>整改期限：</strong>${task.rectificationDeadline ? formatDateTime(task.rectificationDeadline) : '不限'}
+            ${overdue ? '（已逾期）' : ''}
+          </div>
+        </div>
+
+        <h4 class="section-title">检查项信息</h4>
+        <div class="detail-row">
+          <span>检查项名称</span>
+          <span><strong>${task.itemSnapshot.name}</strong></span>
+        </div>
+        ${task.itemSnapshot.description
+          ? html`<div class="detail-row"><span>检查项说明</span><span>${task.itemSnapshot.description}</span></div>`
+          : ''}
+        <div class="detail-row">
+          <span>巡检时备注</span>
+          <span>${task.answerSnapshot.note || '-'}</span>
+        </div>
+        ${task.answerSnapshot.photoDataUrls.length > 0
+          ? html`
+            <div class="detail-row">
+              <span>巡检照片 (${task.answerSnapshot.photoDataUrls.length})</span>
+              <div class="photo-grid">
+                ${task.answerSnapshot.photoDataUrls.map(url => html`<img src="${url}" />`)}
+              </div>
+            </div>
+          `
+          : ''}
+
+        ${task.status === 'pending' || task.status === 'rejected'
+          ? html`
+            <h4 class="section-title">整改信息</h4>
+            <div class="field" style="max-width: 300px;">
+              <label>责任人 ${task.status === 'pending' ? '*' : ''}</label>
+              <input
+                type="text"
+                .value=${this.responsiblePerson}
+                @input=${(e: Event) => this.updateResponsiblePerson((e.target as HTMLInputElement).value)}
+                placeholder="请输入责任人姓名"
+              />
+            </div>
+            <div class="field">
+              <label>整改说明 *</label>
+              <textarea
+                rows="3"
+                .value=${this.rectificationRemark}
+                @input=${(e: Event) => { this.rectificationRemark = (e.target as HTMLTextAreaElement).value; }}
+                placeholder="请详细描述整改措施和结果"
+              ></textarea>
+            </div>
+            <div class="field">
+              <label>整改照片</label>
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                @change=${(e: Event) => this.handleRectificationPhotoUpload((e.target as HTMLInputElement).files)}
+              />
+              ${this.rectificationPhotos.length > 0
+                ? html`
+                  <div class="photo-grid" style="margin-top: 8px;">
+                    ${this.rectificationPhotos.map((url, idx) => html`
+                      <div style="position: relative; display: inline-block;">
+                        <img src="${url}" class="photo-preview" />
+                        <button
+                          class="btn btn-sm btn-danger"
+                          style="position: absolute; top: 2px; right: 2px; padding: 0 6px; font-size: 12px;"
+                          @click=${() => this.removeRectificationPhoto(idx)}
+                        >×</button>
+                      </div>
+                    `)}
+                  </div>
+                `
+                : ''}
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap;">
+              ${task.status === 'pending'
+                ? html`<button class="btn" @click=${() => this.saveRectification()}>💾 保存责任人</button>`
+                : ''}
+              <button class="btn btn-success" @click=${() => {
+                if (task.status === 'rejected') {
+                  this.resubmitRectification();
+                } else {
+                  this.submitRectificationComplete();
+                }
+              }}>
+                ✅ 提交整改
+              </button>
+            </div>
+          `
+          : ''}
+
+        ${canReinspect
+          ? html`
+            <h4 class="section-title">复检</h4>
+            <div class="field" style="max-width: 300px;">
+              <label>复检人 *</label>
+              <input
+                type="text"
+                .value=${this.reinspectorName}
+                @input=${(e: Event) => { this.reinspectorName = (e.target as HTMLInputElement).value; }}
+                placeholder="请输入复检人姓名"
+              />
+            </div>
+            <div class="field">
+              <label>复检意见</label>
+              <textarea
+                rows="3"
+                .value=${this.rectificationRemark}
+                @input=${(e: Event) => { this.rectificationRemark = (e.target as HTMLTextAreaElement).value; }}
+                placeholder="请填写复检意见（退回时必填）"
+              ></textarea>
+            </div>
+            <div class="field">
+              <label>复检照片</label>
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                @change=${(e: Event) => this.handleRectificationPhotoUpload((e.target as HTMLInputElement).files)}
+              />
+              ${this.rectificationPhotos.length > 0
+                ? html`
+                  <div class="photo-grid" style="margin-top: 8px;">
+                    ${this.rectificationPhotos.map((url, idx) => html`
+                      <div style="position: relative; display: inline-block;">
+                        <img src="${url}" class="photo-preview" />
+                        <button
+                          class="btn btn-sm btn-danger"
+                          style="position: absolute; top: 2px; right: 2px; padding: 0 6px; font-size: 12px;"
+                          @click=${() => this.removeRectificationPhoto(idx)}
+                        >×</button>
+                      </div>
+                    `)}
+                  </div>
+                `
+                : ''}
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap;">
+              <button class="btn btn-success" @click=${() => this.reinspectPass()}>
+                ✅ 复检通过
+              </button>
+              <button class="btn btn-danger" @click=${() => this.reinspectReject()}>
+                ❌ 退回整改
+              </button>
+            </div>
+          `
+          : ''}
+
+        ${task.status === 'reinspected' || task.status === 'completed' || task.rectificationPhotos.length > 0
+          ? html`
+            <h4 class="section-title">整改结果</h4>
+            <div class="detail-row">
+              <span>责任人</span>
+              <span>${task.responsiblePerson || '-'}</span>
+            </div>
+            <div class="detail-row">
+              <span>整改说明</span>
+              <span>${task.rectificationDescription || '-'}</span>
+            </div>
+            ${task.rectificationPhotos.length > 0
+              ? html`
+                <div class="detail-row">
+                  <span>整改照片 (${task.rectificationPhotos.length})</span>
+                  <div class="photo-grid">
+                    ${task.rectificationPhotos.map(url => html`<img src="${url}" />`)}
+                  </div>
+                </div>
+              `
+              : ''}
+            ${task.completedAt
+              ? html`<div class="detail-row"><span>整改完成时间</span><span>${formatDateTime(task.completedAt)}</span></div>`
+              : ''}
+            ${task.reinspectedAt
+              ? html`
+                <div class="detail-row"><span>复检人</span><span>${task.reinspector}</span></div>
+                <div class="detail-row"><span>复检时间</span><span>${formatDateTime(task.reinspectedAt)}</span></div>
+              `
+              : ''}
+          `
+          : ''}
+
+        <h4 class="section-title">处理历史</h4>
+        <div class="history-timeline">
+          ${repeat([...task.history].reverse(), h => h.id, history => html`
+            <div class="history-item">
+              <div class="history-action">${this.getHistoryActionLabel(history.action)}</div>
+              <div class="history-meta">
+                操作人：${history.operator || '-'} · ${formatDateTime(history.timestamp)}
+              </div>
+              ${history.remark ? html`<div class="history-remark">${history.remark}</div>` : ''}
+              ${history.photoDataUrls.length > 0
+                ? html`
+                  <div class="history-photos photo-grid">
+                    ${history.photoDataUrls.map(url => html`<img src="${url}" />`)}
+                  </div>
+                `
+                : ''}
+            </div>
+          `)}
+        </div>
       </div>
     `;
   }

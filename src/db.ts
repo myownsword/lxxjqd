@@ -1,11 +1,13 @@
 import type {
   InspectionTemplate,
   InspectionRecord,
-  AnomalyLevel
+  AnomalyLevel,
+  RectificationTask,
+  RectificationStatus
 } from './types';
 
 const DB_NAME = 'inspection-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export const anomalyLevelLabels: Record<AnomalyLevel, string> = {
   none: '无',
@@ -31,12 +33,29 @@ export const anomalyLevelBadgeClasses: Record<AnomalyLevel, string> = {
   critical: 'badge badge-critical'
 };
 
+export const rectificationStatusLabels: Record<RectificationStatus, string> = {
+  pending: '待整改',
+  submitted: '整改中',
+  completed: '待复检',
+  reinspected: '已复检',
+  rejected: '已退回'
+};
+
+export const rectificationStatusBadgeClasses: Record<RectificationStatus, string> = {
+  pending: 'badge badge-medium',
+  submitted: 'badge badge-low',
+  completed: 'badge badge-high',
+  reinspected: 'badge badge-ok',
+  rejected: 'badge badge-critical'
+};
+
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onerror = () => reject(req.error);
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (event) => {
       const db = req.result;
+      const oldVersion = (event as IDBVersionChangeEvent).oldVersion || 0;
       if (!db.objectStoreNames.contains('templates')) {
         db.createObjectStore('templates', { keyPath: 'id' });
       }
@@ -44,6 +63,15 @@ function openDB(): Promise<IDBDatabase> {
         const store = db.createObjectStore('records', { keyPath: 'id' });
         store.createIndex('templateId', 'templateId', { unique: false });
         store.createIndex('status', 'status', { unique: false });
+      }
+      if (oldVersion < 2) {
+        if (!db.objectStoreNames.contains('rectificationTasks')) {
+          const store = db.createObjectStore('rectificationTasks', { keyPath: 'id' });
+          store.createIndex('recordId', 'recordId', { unique: false });
+          store.createIndex('templateId', 'templateId', { unique: false });
+          store.createIndex('status', 'status', { unique: false });
+          store.createIndex('anomalyLevel', 'anomalyLevel', { unique: false });
+        }
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -153,6 +181,91 @@ export const db = {
     return new Promise((resolve, reject) => {
       const tx = db.transaction('records', 'readwrite');
       tx.objectStore('records').delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  async getAllRectificationTasks(): Promise<RectificationTask[]> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('rectificationTasks', 'readonly');
+      const req = tx.objectStore('rectificationTasks').getAll();
+      req.onsuccess = () => {
+        const list = (req.result || []) as RectificationTask[];
+        list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        resolve(list);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  async getRectificationTasksByRecord(recordId: string): Promise<RectificationTask[]> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('rectificationTasks', 'readonly');
+      const idx = tx.objectStore('rectificationTasks').index('recordId');
+      const req = idx.getAll(recordId);
+      req.onsuccess = () => {
+        const list = (req.result || []) as RectificationTask[];
+        list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        resolve(list);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  async getRectificationTasksByStatus(status: RectificationStatus): Promise<RectificationTask[]> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('rectificationTasks', 'readonly');
+      const idx = tx.objectStore('rectificationTasks').index('status');
+      const req = idx.getAll(status);
+      req.onsuccess = () => {
+        const list = (req.result || []) as RectificationTask[];
+        list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        resolve(list);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  async getRectificationTask(id: string): Promise<RectificationTask | undefined> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('rectificationTasks', 'readonly');
+      const req = tx.objectStore('rectificationTasks').get(id);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  async saveRectificationTask(task: RectificationTask): Promise<void> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('rectificationTasks', 'readwrite');
+      const req = tx.objectStore('rectificationTasks').put(task);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  async saveRectificationTasks(tasks: RectificationTask[]): Promise<void> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('rectificationTasks', 'readwrite');
+      const store = tx.objectStore('rectificationTasks');
+      tasks.forEach(task => store.put(task));
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  async deleteRectificationTask(id: string): Promise<void> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('rectificationTasks', 'readwrite');
+      tx.objectStore('rectificationTasks').delete(id);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });

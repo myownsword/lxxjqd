@@ -45,4 +45,36 @@ export interface InspectionRecord {
   anomalyCounts: Record<AnomalyLevel, number>;
 }
 
-export type ViewName = 'templates' | 'template-editor' | 'inspection' | 'records';
+export type RectificationStatus = 'pending' | 'submitted' | 'completed' | 'reinspected' | 'rejected';
+
+export interface RectificationHistory {
+  id: string;
+  action: 'submit' | 'complete' | 'reinspect_pass' | 'reinspect_reject' | 'reject';
+  operator: string;
+  remark: string;
+  timestamp: number;
+  photoDataUrls: string[];
+}
+
+export interface RectificationTask {
+  id: string;
+  recordId: string;
+  templateId: string;
+  templateSnapshot: InspectionTemplate;
+  itemSnapshot: InspectionItem;
+  answerSnapshot: InspectionItemAnswer;
+  anomalyLevel: AnomalyLevel;
+  rectificationDeadline: number | null;
+  responsiblePerson: string;
+  rectificationDescription: string;
+  rectificationPhotos: string[];
+  status: RectificationStatus;
+  createdAt: number;
+  updatedAt: number;
+  completedAt: number | null;
+  reinspectedAt: number | null;
+  reinspector: string;
+  history: RectificationHistory[];
+}
+
+export type ViewName = 'templates' | 'template-editor' | 'inspection' | 'records' | 'rectification' | 'rectification-detail';
