@@ -15,6 +15,7 @@ export interface InspectionTemplate {
   name: string;
   description: string;
   items: InspectionItem[];
+  version: number;
   createdAt: number;
   updatedAt: number;
   lastSubmittedAt: number | null;

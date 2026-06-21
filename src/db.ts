@@ -159,6 +159,15 @@ export const db = {
   }
 };
 
+export function isTemplateNameDuplicate(
+  name: string,
+  excludeId: string | null,
+  existingTemplates: InspectionTemplate[]
+): boolean {
+  const trimmed = name.trim();
+  return existingTemplates.some(t => t.name.trim() === trimmed && t.id !== excludeId);
+}
+
 export function cloneTemplateSnapshot(t: InspectionTemplate): InspectionTemplate {
   return JSON.parse(JSON.stringify(t));
 }

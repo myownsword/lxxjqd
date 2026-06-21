@@ -12,7 +12,8 @@ import {
   computeAnomalyCounts,
   totalAnomalies,
   formatDateTime,
-  readFileAsDataURL
+  readFileAsDataURL,
+  isTemplateNameDuplicate
 } from '../db';
 import type {
   InspectionTemplate,
@@ -534,6 +535,7 @@ export class InspectionApp extends LitElement {
       name: '',
       description: '',
       items: [this.createEmptyItem()],
+      version: 1,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       lastSubmittedAt: null,
@@ -604,10 +606,17 @@ export class InspectionApp extends LitElement {
       this.showToast('请输入模板名称');
       return;
     }
+    if (isTemplateNameDuplicate(this.editingTemplate.name, this.editingTemplate.id, this.templates)) {
+      this.showToast('模板名称已存在，请使用其他名称');
+      return;
+    }
     const invalidItem = this.editingTemplate.items.find(i => i.name.trim() === '');
     if (invalidItem) {
       this.showToast('请填写所有检查项的名称');
       return;
+    }
+    if (this.editingTemplateId) {
+      this.editingTemplate.version = (this.editingTemplate.version || 0) + 1;
     }
     this.editingTemplate.updatedAt = Date.now();
     await db.saveTemplate(this.editingTemplate);
@@ -769,31 +778,50 @@ export class InspectionApp extends LitElement {
   }
 
   exportRecordJSON(record: InspectionRecord) {
+    const anomalyItems = record.answers.filter(a => a.anomalyLevel !== 'none');
     const exportData = {
       exportTime: new Date().toISOString(),
       record: {
         id: record.id,
-        templateName: record.templateSnapshot.name,
-        templateDescription: record.templateSnapshot.description,
+        status: record.status,
         inspector: record.inspector,
         startedAt: new Date(record.startedAt).toISOString(),
         submittedAt: record.submittedAt ? new Date(record.submittedAt).toISOString() : null,
         finishedAt: record.submittedAt ? new Date(record.submittedAt).toISOString() : null,
-        status: record.status,
-        anomalyCounts: record.anomalyCounts,
-        items: record.answers.map(a => ({
-          name: a.itemSnapshot.name,
-          description: a.itemSnapshot.description,
-          result: a.result,
-          note: a.note,
-          anomalyLevel: a.anomalyLevel,
-          anomalyLevelLabel: anomalyLevelLabels[a.anomalyLevel],
-          rectificationDeadline: a.rectificationDeadline
-            ? new Date(a.rectificationDeadline).toISOString()
-            : null,
-          photoCount: a.photoDataUrls.length
-        }))
-      }
+        anomalyCounts: record.anomalyCounts
+      },
+      template: {
+        id: record.templateSnapshot.id,
+        name: record.templateSnapshot.name,
+        description: record.templateSnapshot.description,
+        version: record.templateSnapshot.version || 0,
+        snapshotItems: record.templateSnapshot.items.length
+      },
+      anomalyItems: anomalyItems.map(a => ({
+        name: a.itemSnapshot.name,
+        description: a.itemSnapshot.description,
+        result: a.result,
+        note: a.note,
+        anomalyLevel: a.anomalyLevel,
+        anomalyLevelLabel: anomalyLevelLabels[a.anomalyLevel],
+        rectificationDeadline: a.rectificationDeadline
+          ? new Date(a.rectificationDeadline).toISOString()
+          : null,
+        photoCount: a.photoDataUrls.length
+      })),
+      items: record.answers.map(a => ({
+        name: a.itemSnapshot.name,
+        description: a.itemSnapshot.description,
+        required: a.itemSnapshot.required,
+        result: a.result,
+        note: a.note,
+        anomalyLevel: a.anomalyLevel,
+        anomalyLevelLabel: anomalyLevelLabels[a.anomalyLevel],
+        rectificationDeadline: a.rectificationDeadline
+          ? new Date(a.rectificationDeadline).toISOString()
+          : null,
+        photoCount: a.photoDataUrls.length
+      }))
     };
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -859,7 +887,7 @@ export class InspectionApp extends LitElement {
               return html`
                 <div class="template-item">
                   <div class="template-info">
-                    <h3>${tplName}</h3>
+                    <h3>${tplName} <span style="font-size: 12px; font-weight: 400; color: var(--color-text-muted);">v${draft.templateSnapshot?.version || 0}</span></h3>
                     <p>巡检人：${draft.inspector || '(未填写)'} · 保存于：${formatDateTime(draft.updatedAt)}</p>
                     <div class="template-meta">
                       <span>共 ${draft.answers.length} 项</span>
@@ -897,6 +925,7 @@ export class InspectionApp extends LitElement {
                       <p>${tpl.description || '(无描述)'}</p>
                       <div class="template-meta">
                         <span class="item-count">共 ${tpl.items.length} 项检查项</span>
+                        <span>版本 v${tpl.version || 0}</span>
                         <span>创建于 ${formatDateTime(tpl.createdAt)}</span>
                         <span>最近提交 ${formatDateTime(stats.lastSubmittedAt || tpl.updatedAt)}</span>
                         ${stats.submissionCount > 0
@@ -944,14 +973,26 @@ export class InspectionApp extends LitElement {
             placeholder="如：月度设备安全检查"
           />
         </div>
-        <div class="field">
-          <label>模板描述</label>
-          <textarea
-            rows="2"
-            .value=${t.description}
-            @input=${(e: Event) => this.updateTemplateField('description', (e.target as HTMLTextAreaElement).value)}
-            placeholder="说明该模板的用途和场景"
-          ></textarea>
+        <div class="row">
+          <div class="field">
+            <label>模板描述</label>
+            <textarea
+              rows="2"
+              .value=${t.description}
+              @input=${(e: Event) => this.updateTemplateField('description', (e.target as HTMLTextAreaElement).value)}
+              placeholder="说明该模板的用途和场景"
+            ></textarea>
+          </div>
+          <div class="field">
+            <label>模板版本</label>
+            <input
+              type="text"
+              value="v${t.version || 0}"
+              disabled
+              style="background: #f3f4f6; color: #6b7280;"
+            />
+            <div class="hint">新建时为 v1，每次编辑保存后自动递增</div>
+          </div>
         </div>
 
         <h4 style="margin: 20px 0 12px; font-size: 15px;">检查项</h4>
@@ -1048,7 +1089,7 @@ export class InspectionApp extends LitElement {
       <div class="card">
         <button class="back-link" @click=${() => { this.saveDraft(); this.goTo('templates'); }}>← 返回并保存草稿</button>
         <div class="card-header" style="margin-top: 10px;">
-          <h3 class="card-title">${tpl.name}</h3>
+          <h3 class="card-title">${tpl.name} <span style="font-size: 14px; font-weight: 400; color: var(--color-text-muted);">v${tpl.version || 0}</span></h3>
           <span class="status-tag ${r.status === 'draft' ? 'status-draft' : 'status-submitted'}">
             ${r.status === 'draft' ? '草稿' : '已提交'}
           </span>
@@ -1249,7 +1290,7 @@ export class InspectionApp extends LitElement {
             ${repeat(filtered, r => r.id, record => html`
               <div class="record-item">
                 <div class="record-head">
-                  <h4>${record.templateSnapshot.name}</h4>
+                  <h4>${record.templateSnapshot.name} <span style="font-size: 12px; font-weight: 400; color: var(--color-text-muted);">v${record.templateSnapshot.version || 0}</span></h4>
                   <div>
                     <button class="btn btn-sm btn-primary" @click=${() => this.viewRecord(record.id)}>
                       查看
@@ -1281,7 +1322,7 @@ export class InspectionApp extends LitElement {
       <div class="card">
         <button class="back-link" @click=${() => { this.activeRecord = null; this.activeRecordId = null; }}>← 返回记录列表</button>
         <div class="card-header" style="margin-top: 10px;">
-          <h3 class="card-title">${r.templateSnapshot.name}</h3>
+          <h3 class="card-title">${r.templateSnapshot.name} <span style="font-size: 14px; font-weight: 400; color: var(--color-text-muted);">v${r.templateSnapshot.version || 0}</span></h3>
           <div style="display: flex; gap: 8px;">
             <span class="status-tag status-submitted">已提交</span>
             <button class="btn btn-primary btn-sm" @click=${() => this.exportRecordJSON(r)}>导出 JSON</button>
@@ -1291,6 +1332,7 @@ export class InspectionApp extends LitElement {
 
         <div class="summary-bar">
           <div><strong>巡检人：</strong>${r.inspector}</div>
+          <div><strong>模板版本：</strong>v${r.templateSnapshot.version || 0}</div>
           <div><strong>开始：</strong>${formatDateTime(r.startedAt)}</div>
           <div><strong>完成：</strong>${formatDateTime(r.submittedAt)}</div>
           ${this.renderAnomalyBadges(r.anomalyCounts)}
